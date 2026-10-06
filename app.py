@@ -4,7 +4,6 @@ import pandas as pd
 import streamlit as st
 import chromadb
 from chromadb import EmbeddingFunction, Documents, Embeddings
-from chromadb.config import Settings
 from google import genai
 from dotenv import load_dotenv
 
@@ -15,43 +14,30 @@ st.set_page_config(page_title="Company Policy Assistant Comparison", layout="wid
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    st.error("Please add your GEMINI_API_KEY in Streamlit Secrets or .env file")
+    st.error("Please add your GEMINI_API_KEY in the .env file")
     st.stop()
 
 # Initialize the official google-genai SDK client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-PREFERRED_GENERATION_MODEL = "gemini-3.5-flash-lite"
+# Generation Model Configuration
+AVAILABLE_GENERATION_MODEL = "gemini-3.5-flash-lite"
 
+# Embedding model fallback detection
 @st.cache_resource
-def get_working_models():
-    gen_model = PREFERRED_GENERATION_MODEL
-    emb_model = "text-embedding-004"
-    
+def get_embedding_model() -> str:
     try:
-        models = list(client.models.list())
-        names = [getattr(m, "name", "").replace("models/", "") for m in models]
-        
-        # Detect generation model
-        if PREFERRED_GENERATION_MODEL in names:
-            gen_model = PREFERRED_GENERATION_MODEL
-        else:
-            for n in names:
-                if "gemini" in n and "embed" not in n:
-                    gen_model = n
-                    break
-
-        # Detect embedding model
-        for candidate in ["text-embedding-004", "embedding-001"]:
-            if candidate in names:
-                emb_model = candidate
-                break
+        models_list = list(client.models.list())
+        for model in models_list:
+            actions = getattr(model, "supported_generation_methods", []) or getattr(model, "supported_actions", [])
+            model_name = getattr(model, "name", "").replace("models/", "")
+            if "embedContent" in actions or "embed_content" in actions:
+                return model_name
     except Exception:
         pass
+    return "text-embedding-004"
 
-    return gen_model, emb_model
-
-AVAILABLE_GENERATION_MODEL, AVAILABLE_EMBEDDING_MODEL = get_working_models()
+AVAILABLE_EMBEDDING_MODEL = get_embedding_model()
 
 # ------------------------------------------------------------------
 # 1. ChromaDB Compatible Embedding Function
@@ -74,19 +60,10 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
                 elif hasattr(res, "embedding") and res.embedding:
                     embeddings.append(res.embedding.values)
                 else:
-                    # Generic fallback if structure differs
-                    embeddings.append(res.values if hasattr(res, "values") else [])
+                    raise ValueError(f"Unexpected embedding response format: {res}")
             except Exception as e:
-                # Secondary fallback if primary fails
-                try:
-                    res = client.models.embed_content(
-                        model="text-embedding-004",
-                        contents=text
-                    )
-                    embeddings.append(res.embeddings[0].values if hasattr(res, "embeddings") else res.embedding.values)
-                except Exception as inner_e:
-                    st.error(f"Error generating embedding with {self.model_name}: {e}")
-                    raise inner_e
+                st.error(f"Error generating embedding with model '{self.model_name}': {e}")
+                raise e
         return embeddings
 
 # ------------------------------------------------------------------
@@ -99,7 +76,7 @@ def init_data_and_db():
         st.stop()
 
     df = pd.read_csv("company_policies.csv")
-    chroma_client = chromadb.Client(Settings(is_persistent=False, allow_reset=True))
+    chroma_client = chromadb.Client()
     gemini_emb_fn = GeminiEmbeddingFunction(model_name=AVAILABLE_EMBEDDING_MODEL)
     
     try:
@@ -156,7 +133,7 @@ def query_rules_based(user_query: str, df: pd.DataFrame) -> dict:
         policy_title = str(best_match.get('title', 'Unknown Title'))
         policy_text = str(best_match.get('policy_text', ''))
         answer = f"**Matched Policy ({policy_title}):**\n\n{policy_text}"
-        tokens = len(answer.split())
+        tokens = len(answer.split())  # Words approximation for non-LLM
         unsupported = "Low (Direct database extract)"
     else:
         policy_title = "None Identified"
