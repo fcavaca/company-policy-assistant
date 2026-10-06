@@ -21,9 +21,6 @@ if not GEMINI_API_KEY:
 # Initialize the official google-genai SDK client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ------------------------------------------------------------------
-# Model Detection with user's preferred model (gemini-3.5-flash-lite)
-# ------------------------------------------------------------------
 PREFERRED_GENERATION_MODEL = "gemini-3.5-flash-lite"
 
 @st.cache_resource
@@ -31,12 +28,8 @@ def get_working_generation_model() -> str:
     try:
         models_list = list(client.models.list())
         available_names = [getattr(m, "name", "").replace("models/", "") for m in models_list]
-        
-        # 1. Se o modelo pretendido estiver disponível, usa-o
         if PREFERRED_GENERATION_MODEL in available_names:
             return PREFERRED_GENERATION_MODEL
-            
-        # 2. Se não, procura outro modelo gemini de geração ativo para evitar erros
         for name in available_names:
             if "gemini" in name and "embed" not in name:
                 return name
@@ -44,46 +37,44 @@ def get_working_generation_model() -> str:
         pass
     return PREFERRED_GENERATION_MODEL
 
-@st.cache_resource
-def get_working_embedding_model() -> str:
-    try:
-        models_list = list(client.models.list())
-        available_names = [getattr(m, "name", "").replace("models/", "") for m in models_list]
-        for cand in ["text-embedding-004", "embedding-001"]:
-            if cand in available_names:
-                return cand
-    except Exception:
-        pass
-    return "text-embedding-004"
-
 AVAILABLE_GENERATION_MODEL = get_working_generation_model()
-AVAILABLE_EMBEDDING_MODEL = get_working_embedding_model()
 
 # ------------------------------------------------------------------
-# 1. ChromaDB Compatible Embedding Function
+# 1. Robust ChromaDB Compatible Embedding Function (With Fallbacks)
 # ------------------------------------------------------------------
 class GeminiEmbeddingFunction(EmbeddingFunction):
-    def __init__(self, model_name: str):
+    def __init__(self):
         super().__init__()
-        self.model_name = model_name
+        self.candidate_models = ["text-embedding-004", "embedding-001", "text-embedding-gecko"]
 
     def __call__(self, input: Documents) -> Embeddings:
         embeddings = []
         for text in input:
-            try:
-                res = client.models.embed_content(
-                    model=self.model_name,
-                    contents=text
-                )
-                if hasattr(res, "embeddings") and res.embeddings:
-                    embeddings.append(res.embeddings[0].values)
-                elif hasattr(res, "embedding") and res.embedding:
-                    embeddings.append(res.embedding.values)
-                else:
-                    raise ValueError(f"Unexpected embedding response format: {res}")
-            except Exception as e:
-                st.error(f"Error generating embedding with model '{self.model_name}': {e}")
-                raise e
+            success = False
+            last_error = None
+            
+            for model_name in self.candidate_models:
+                try:
+                    res = client.models.embed_content(
+                        model=model_name,
+                        contents=text
+                    )
+                    if hasattr(res, "embeddings") and res.embeddings:
+                        embeddings.append(res.embeddings[0].values)
+                        success = True
+                        break
+                    elif hasattr(res, "embedding") and res.embedding:
+                        embeddings.append(res.embedding.values)
+                        success = True
+                        break
+                except Exception as e:
+                    last_error = e
+                    continue
+            
+            if not success:
+                st.error(f"Failed to generate embedding with all candidate models. Last error: {last_error}")
+                raise last_error if last_error else ValueError("Could not generate embeddings.")
+                
         return embeddings
 
 # ------------------------------------------------------------------
@@ -97,7 +88,7 @@ def init_data_and_db():
 
     df = pd.read_csv("company_policies.csv")
     chroma_client = chromadb.Client(Settings(is_persistent=False, allow_reset=True))
-    gemini_emb_fn = GeminiEmbeddingFunction(model_name=AVAILABLE_EMBEDDING_MODEL)
+    gemini_emb_fn = GeminiEmbeddingFunction()
     
     try:
         chroma_client.delete_collection("policies_gemini")
@@ -239,7 +230,7 @@ Question: {user_query}
 # 4. Streamlit Dashboard Layout
 # ------------------------------------------------------------------
 st.title("📋 Company Policy Assistant Search Comparison")
-st.caption(f"Active Engine — Model: `{AVAILABLE_GENERATION_MODEL}` | Embedding: `{AVAILABLE_EMBEDDING_MODEL}`")
+st.caption(f"Active Engine — Model: `{AVAILABLE_GENERATION_MODEL}`")
 
 with st.sidebar:
     st.header("Settings")
