@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 import chromadb
 from chromadb import EmbeddingFunction, Documents, Embeddings
+from chromadb.config import Settings
 from google import genai
 from dotenv import load_dotenv
 
@@ -14,14 +15,14 @@ st.set_page_config(page_title="Company Policy Assistant Comparison", layout="wid
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    st.error("Please add your GEMINI_API_KEY in the .env file")
+    st.error("Please add your GEMINI_API_KEY in the .env file or Streamlit Secrets")
     st.stop()
 
 # Initialize the official google-genai SDK client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Generation Model Configuration
-AVAILABLE_GENERATION_MODEL = "gemini-3.5-flash-lite"
+AVAILABLE_GENERATION_MODEL = "gemini-1.5-flash"
 
 # Embedding model fallback detection
 @st.cache_resource
@@ -74,8 +75,6 @@ def init_data_and_db():
     if not os.path.exists("company_policies.csv"):
         st.error("The file 'company_policies.csv' was not found in the current directory.")
         st.stop()
-
-from chromadb.config import Settings
 
     df = pd.read_csv("company_policies.csv")
     chroma_client = chromadb.Client(Settings(is_persistent=False, allow_reset=True))
@@ -135,7 +134,7 @@ def query_rules_based(user_query: str, df: pd.DataFrame) -> dict:
         policy_title = str(best_match.get('title', 'Unknown Title'))
         policy_text = str(best_match.get('policy_text', ''))
         answer = f"**Matched Policy ({policy_title}):**\n\n{policy_text}"
-        tokens = len(answer.split())  # Words approximation for non-LLM
+        tokens = len(answer.split())
         unsupported = "Low (Direct database extract)"
     else:
         policy_title = "None Identified"
@@ -265,28 +264,4 @@ if st.button("Submit Question", type="primary"):
             st.markdown(f"**Relevant Policy:** {res_with_index['policy']}")
             st.markdown(f"**Response Time:** `{res_with_index['latency']:.2f}s`")
             st.markdown(f"**Token Use:** `{res_with_index['tokens']} tokens`")
-            st.markdown(f"**Unsupported Output Tendency:** `{res_with_index['unsupported_tendency']}`")
-            st.success(res_with_index['answer'])
-
-st.divider()
-
-# ------------------------------------------------------------------
-# 5. Required Assignment Deliverable (Two-Paragraph Analysis & Tables)
-# ------------------------------------------------------------------
-st.header("📊 Comparative Analysis & Preferred Approach")
-
-st.markdown("""
-Evaluating information retrieval systems for internal policy search requires balancing precision, speed, resource consumption, and answer reliability. A rules-based keyword search offers sub-millisecond retrieval times and zero token costs, but it fails whenever an employee's query uses synonyms or conversational phrasing that does not strictly match words in the document text. Conversely, an LLM operating without a vector index produces natural, articulate responses but relies entirely on its internal training data; this leads to high latency, token consumption, and a severe tendency to generate plausible yet unsupported or inaccurate policies (hallucinations). An LLM enhanced with a vector index (RAG) resolves these drawbacks by semantically querying a vector database like ChromaDB to extract exact policy snippets before generating an answer, guaranteeing high relevance and explicit source identification.
-
-The preferred approach for enterprise policy assistance is an **LLM with a Vector Index (RAG)**. Although it incurs higher token costs and slight retrieval latency compared to a basic keyword lookup, it eliminates hallucinations by strictly constraining the language model to verifiable context retrieved from company databases. While rules-based search remains useful for instant, low-resource exact keyword filtering, RAG delivers the required natural language understanding and strict policy alignment necessary for compliance and employee self-service.
-""")
-
-summary_data = {
-    "Approach": ["Rules-Based Search", "LLM without Vector Index", "LLM with Vector Index (RAG)"],
-    "Semantic Understanding": ["Low (Keyword Match Only)", "High (Parametric Knowledge)", "High (Semantic Embedding)"],
-    "Policy Attribution": ["Exact Document Extract", "Unverified / Guessing", "Exact Context Identification"],
-    "Latency": ["Ultra Fast (< 0.05s)", "Moderate (~ 1.0s - 2.5s)", "Moderate (~ 1.2s - 3.0s)"],
-    "Token Overhead": ["0 API Tokens", "Low to Moderate", "Higher (Query + Context Payload)"],
-    "Unsupported Output Tendency": ["None (Raw Match)", "High (Hallucinations)", "Low (Context-Grounded)"]
-}
-st.table(pd.DataFrame(summary_data))
+            st.markdown(f"**Unsupported Output Tendency:** `{res_with
