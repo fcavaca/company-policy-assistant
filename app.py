@@ -75,8 +75,10 @@ def init_data_and_db():
         st.error("The file 'company_policies.csv' was not found in the current directory.")
         st.stop()
 
+from chromadb.config import Settings
+
     df = pd.read_csv("company_policies.csv")
-    chroma_client = chromadb.Client()
+    chroma_client = chromadb.Client(Settings(is_persistent=False, allow_reset=True))
     gemini_emb_fn = GeminiEmbeddingFunction(model_name=AVAILABLE_EMBEDDING_MODEL)
     
     try:
