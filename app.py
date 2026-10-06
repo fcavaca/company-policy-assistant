@@ -15,30 +15,49 @@ st.set_page_config(page_title="Company Policy Assistant Comparison", layout="wid
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    st.error("Please add your GEMINI_API_KEY in the .env file or Streamlit Secrets")
+    st.error("Please add your GEMINI_API_KEY in Streamlit Secrets or .env file")
     st.stop()
 
 # Initialize the official google-genai SDK client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Generation Model Configuration
-AVAILABLE_GENERATION_MODEL = "gemini-1.5-flash"
+# ------------------------------------------------------------------
+# Model Detection with user's preferred model (gemini-3.5-flash-lite)
+# ------------------------------------------------------------------
+PREFERRED_GENERATION_MODEL = "gemini-3.5-flash-lite"
 
-# Embedding model fallback detection
 @st.cache_resource
-def get_embedding_model() -> str:
+def get_working_generation_model() -> str:
     try:
         models_list = list(client.models.list())
-        for model in models_list:
-            actions = getattr(model, "supported_generation_methods", []) or getattr(model, "supported_actions", [])
-            model_name = getattr(model, "name", "").replace("models/", "")
-            if "embedContent" in actions or "embed_content" in actions:
-                return model_name
+        available_names = [getattr(m, "name", "").replace("models/", "") for m in models_list]
+        
+        # 1. Se o modelo pretendido estiver disponível, usa-o
+        if PREFERRED_GENERATION_MODEL in available_names:
+            return PREFERRED_GENERATION_MODEL
+            
+        # 2. Se não, procura outro modelo gemini de geração ativo para evitar erros
+        for name in available_names:
+            if "gemini" in name and "embed" not in name:
+                return name
+    except Exception:
+        pass
+    return PREFERRED_GENERATION_MODEL
+
+@st.cache_resource
+def get_working_embedding_model() -> str:
+    try:
+        models_list = list(client.models.list())
+        available_names = [getattr(m, "name", "").replace("models/", "") for m in models_list]
+        for cand in ["text-embedding-004", "embedding-001"]:
+            if cand in available_names:
+                return cand
     except Exception:
         pass
     return "text-embedding-004"
 
-AVAILABLE_EMBEDDING_MODEL = get_embedding_model()
+AVAILABLE_GENERATION_MODEL = get_working_generation_model()
+AVAILABLE_EMBEDDING_MODEL = get_working_embedding_model()
 
 # ------------------------------------------------------------------
 # 1. ChromaDB Compatible Embedding Function
