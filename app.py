@@ -24,57 +24,69 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 PREFERRED_GENERATION_MODEL = "gemini-3.5-flash-lite"
 
 @st.cache_resource
-def get_working_generation_model() -> str:
+def get_working_models():
+    gen_model = PREFERRED_GENERATION_MODEL
+    emb_model = "text-embedding-004"
+    
     try:
-        models_list = list(client.models.list())
-        available_names = [getattr(m, "name", "").replace("models/", "") for m in models_list]
-        if PREFERRED_GENERATION_MODEL in available_names:
-            return PREFERRED_GENERATION_MODEL
-        for name in available_names:
-            if "gemini" in name and "embed" not in name:
-                return name
+        models = list(client.models.list())
+        names = [getattr(m, "name", "").replace("models/", "") for m in models]
+        
+        # Detect generation model
+        if PREFERRED_GENERATION_MODEL in names:
+            gen_model = PREFERRED_GENERATION_MODEL
+        else:
+            for n in names:
+                if "gemini" in n and "embed" not in n:
+                    gen_model = n
+                    break
+
+        # Detect embedding model
+        for candidate in ["text-embedding-004", "embedding-001"]:
+            if candidate in names:
+                emb_model = candidate
+                break
     except Exception:
         pass
-    return PREFERRED_GENERATION_MODEL
 
-AVAILABLE_GENERATION_MODEL = get_working_generation_model()
+    return gen_model, emb_model
+
+AVAILABLE_GENERATION_MODEL, AVAILABLE_EMBEDDING_MODEL = get_working_models()
 
 # ------------------------------------------------------------------
-# 1. Robust ChromaDB Compatible Embedding Function (With Fallbacks)
+# 1. ChromaDB Compatible Embedding Function
 # ------------------------------------------------------------------
 class GeminiEmbeddingFunction(EmbeddingFunction):
-    def __init__(self):
+    def __init__(self, model_name: str):
         super().__init__()
-        self.candidate_models = ["text-embedding-004", "embedding-001", "text-embedding-gecko"]
+        self.model_name = model_name
 
     def __call__(self, input: Documents) -> Embeddings:
         embeddings = []
         for text in input:
-            success = False
-            last_error = None
-            
-            for model_name in self.candidate_models:
+            try:
+                res = client.models.embed_content(
+                    model=self.model_name,
+                    contents=text
+                )
+                if hasattr(res, "embeddings") and res.embeddings:
+                    embeddings.append(res.embeddings[0].values)
+                elif hasattr(res, "embedding") and res.embedding:
+                    embeddings.append(res.embedding.values)
+                else:
+                    # Generic fallback if structure differs
+                    embeddings.append(res.values if hasattr(res, "values") else [])
+            except Exception as e:
+                # Secondary fallback if primary fails
                 try:
                     res = client.models.embed_content(
-                        model=model_name,
+                        model="text-embedding-004",
                         contents=text
                     )
-                    if hasattr(res, "embeddings") and res.embeddings:
-                        embeddings.append(res.embeddings[0].values)
-                        success = True
-                        break
-                    elif hasattr(res, "embedding") and res.embedding:
-                        embeddings.append(res.embedding.values)
-                        success = True
-                        break
-                except Exception as e:
-                    last_error = e
-                    continue
-            
-            if not success:
-                st.error(f"Failed to generate embedding with all candidate models. Last error: {last_error}")
-                raise last_error if last_error else ValueError("Could not generate embeddings.")
-                
+                    embeddings.append(res.embeddings[0].values if hasattr(res, "embeddings") else res.embedding.values)
+                except Exception as inner_e:
+                    st.error(f"Error generating embedding with {self.model_name}: {e}")
+                    raise inner_e
         return embeddings
 
 # ------------------------------------------------------------------
@@ -88,7 +100,7 @@ def init_data_and_db():
 
     df = pd.read_csv("company_policies.csv")
     chroma_client = chromadb.Client(Settings(is_persistent=False, allow_reset=True))
-    gemini_emb_fn = GeminiEmbeddingFunction()
+    gemini_emb_fn = GeminiEmbeddingFunction(model_name=AVAILABLE_EMBEDDING_MODEL)
     
     try:
         chroma_client.delete_collection("policies_gemini")
@@ -230,7 +242,7 @@ Question: {user_query}
 # 4. Streamlit Dashboard Layout
 # ------------------------------------------------------------------
 st.title("📋 Company Policy Assistant Search Comparison")
-st.caption(f"Active Engine — Model: `{AVAILABLE_GENERATION_MODEL}`")
+st.caption(f"Active Engine — Model: `{AVAILABLE_GENERATION_MODEL}` | Embedding: `{AVAILABLE_EMBEDDING_MODEL}`")
 
 with st.sidebar:
     st.header("Settings")
